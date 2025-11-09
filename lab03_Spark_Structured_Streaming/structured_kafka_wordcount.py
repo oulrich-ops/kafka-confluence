@@ -19,7 +19,7 @@ df = spark \
     .option("kafka.sasl.mechanism", "PLAIN") \
     .option("kafka.sasl.jaas.config", 
             'org.apache.kafka.common.security.plain.PlainLoginModule required username="FCLAEESPDSIC7UXR" password="cfltt3mqlGreq7TUTihrQURLGc89LrQPW//flojUU+1Npqh88mMXbE/OHMZvfWYQ";') \
-    .option("subscribe", "log_web") \
+    .option("subscribe", "ecommerce") \
     .option("startingOffsets", "earliest") \
     .load()
 
@@ -33,6 +33,7 @@ query = word_counts \
     .writeStream \
     .outputMode("complete") \
     .format("console") \
+    .trigger(processingTime='10 seconds')\
     .start()
 
 query.awaitTermination()
