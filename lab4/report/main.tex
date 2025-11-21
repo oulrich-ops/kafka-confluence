@@ -1,0 +1,194 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{geometry}
+\usepackage{hyperref}
+
+\geometry{margin=1in}
+
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    stringstyle=\color{red},
+    commentstyle=\color{green},
+    breaklines=true,
+    frame=single,
+    numbers=left,
+    numberstyle=\tiny\color{gray}
+}
+
+\title{Lab 4 Report\\Traitement de flux de données (streaming)}
+\author{OUEDRAOGO K. Abraham}
+\date{November 19, 2025}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+This lab focuses on streaming data processing using Apache Spark Structured Streaming combined with Kafka as the data source. The main objectives were to connect Spark to Kafka topics, process streaming data in real-time, and perform various analyses on e-commerce and product data. We also explored how different parameters like trigger intervals and output modes affect the streaming behavior.
+
+\section{Exercise 1: Kafka and Spark Streaming Integration}
+
+\subsection{Manual Message Addition and Observation}
+
+After establishing the connection between Spark and my Confluent Cloud Kafka topic, I tested the streaming behavior by manually adding a message through the Confluent Cloud interface. The observation was very interesting. When the message was added manually in the topic, Spark detected it automatically. A new micro-batch was executed and the results of the processing were updated immediately in the terminal. The most important point is that no restart of the program was necessary. This demonstrates the true streaming nature of Spark Structured Streaming and its ability to continuously monitor the Kafka topic for new data.
+
+\subsection{Kafka Producer Implementation}
+
+I created a Kafka Producer program that generates pseudo e-commerce sales data with the following fields: order id, product name, card type, order amount, order datetime, country name, city name, and ecommerce website name. The producer sends messages at a rate of 8 messages per second.
+
+The key part of the producer code shows how data is generated and sent to Kafka:
+
+\begin{lstlisting}
+def main():
+    topic = "ecommerce"
+    rate = 8
+    producer = Producer(config)
+    
+    while True:
+        order_id = uuid.uuid4().hex[:8]
+        orderproductname = random.choice(products)
+        order_amount = round(random.uniform(50.0, 2000.0), 2)
+        order_date = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        order_country = random.choice(list(country_cities.keys()))
+        order_city = random.choice(country_cities[order_country])
+        
+        value = {
+            "order_id": order_id,
+            "product_name": orderproductname,
+            "card_type": order_card_types,
+            "amount": order_amount,
+            "order_date": order_date,
+            "country": order_country,
+            "city": order_city,
+            "ecommerce_website_name": order_website
+        }
+        
+        producer.produce(topic, key=order_id, value=json.dumps(value), 
+                        callback=delivery_status)
+        time.sleep(1 / rate)
+\end{lstlisting}
+
+\subsection{Understanding the Trigger Parameter}
+
+One of the most important concepts in Spark Structured Streaming is the trigger parameter. The trigger controls the frequency at which Spark creates micro-batches to read and process new messages from Kafka. I tested different trigger intervals to understand their impact.
+
+With a trigger of 1 second, Spark reads new messages every second, making the application very reactive. However, if the processing takes longer than one second, the system can fall behind. When I tested with 5 and 10 second triggers, Spark grouped all messages that arrived within those time windows and processed them together in single micro-batches. This approach is less reactive but reduces the overhead of creating too many micro-batches.
+
+During testing with a 10 second trigger and high message volume, I observed a warning message from Spark stating that the current batch was falling behind because the trigger interval was 10000 milliseconds but the processing took 16075 milliseconds. This warning is completely normal and simply indicates that the previous micro-batch took more time to process than the configured trigger interval.
+
+To solve this issue, there are several approaches: increase the trigger interval to 20 or 30 seconds, optimize the transformations, or use append mode instead of complete mode for queries that do not require cumulative aggregations.
+
+\subsection{Analysis by Country and City}
+
+The task was to calculate the total order amount grouped by country and city. I created a streaming query that groups all incoming orders by their country and city fields, then sums up the order amounts. The query uses complete output mode because we need to see the cumulative totals. The results update every 30 seconds based on the configured trigger interval.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{kafka_analysis_results.png}
+\caption{Results of the country and city analysis showing total amounts. The output shows Batch 0 and Batch 1, demonstrating how the trigger controls micro-batch frequency. When we increase the processingTime, Spark processes data less frequently by grouping more messages together.}
+\label{fig:kafka_analysis}
+\end{figure}
+
+The results in Figure \ref{fig:kafka_analysis} show how different cities in various countries accumulate sales amounts. For example, London in UK shows 46384.57, Manchester shows 44587.36, and other cities from USA, Canada, Germany, France and Australia are also displayed. The system successfully updates these totals as new messages arrive from Kafka.
+
+\section{Exercise 2: File-based Streaming with Adidas Dataset}
+
+\subsection{Understanding Output Modes}
+
+Before starting the main analysis, I tested the difference between append and complete output modes. With append output mode, only the new rows from the current micro-batch are displayed each time. When I tried to run an aggregation query with append mode, the program did not work correctly because append mode is not suitable for queries that compute cumulative statistics.
+
+After changing the output mode to complete, the program started working properly. In complete mode, all rows of the aggregated DataFrame are written at each micro-batch. This means we can see the total cumulative results that include all data processed from the beginning until the current moment. The main difference is that append mode is faster and uses less memory because it only outputs new results, while complete mode requires more resources but provides the full picture of the aggregated data.
+
+\subsection{File Streaming Behavior}
+
+To mimic a real data stream, the exercise used a file-based approach where Spark monitors a directory for new files. The Adidas dataset was stored in the adidas stream folder, and we created an empty stream folder that Spark would monitor. Each time we copy a file from adidas stream to stream, Spark detects it as a new batch of data and processes it accordingly.
+
+When I copied the file named aab from the adidas stream folder to the stream folder, Spark immediately detected it and triggered Batch 1. This behavior demonstrates that Spark Structured Streaming can work not only with messaging systems like Kafka but also with file systems, making it very versatile for different use cases.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.95\textwidth]{file_stream_batch.png}
+\caption{When the file aab was copied to the stream directory, Spark automatically detected it and triggered Batch 1. The output shows all columns from the Adidas dataset including url, name, sku, selling price, original price, and other product information.}
+\label{fig:file_stream}
+\end{figure}
+
+As shown in Figure \ref{fig:file_stream}, the system detected the new file and processed it immediately. We can see various Adidas products like Essentials Loose clothing, Superstar Shoes, and Formotion Sculpt items with their prices and availability information.
+\newpage
+\subsection{Product Analysis Queries}
+
+I implemented two streaming queries for analyzing the Adidas products:
+
+\textbf{Query 1: Top 5 products with highest reviews and lowest price}
+
+The approach was to group data by product URL, name and selling price, then calculate the sum of reviews count for each product. I applied ordering by total reviews in descending order and then by selling price in ascending order. This identifies products that are both popular and affordable.
+
+\textbf{Query 2: Top 5 products with biggest discount percentage}
+
+First, I calculated the discount percentage using the formula: (original price - selling price) / original price * 100. Then I grouped the data by product URL and name, summed the discount percentages, and ordered by total discount in descending order. This analysis helps identify which products offer the best deals.
+
+Key code extract for the discount analysis:
+
+\begin{lstlisting}
+df_discount = df.withColumn(
+    "discount_percentage",
+    round((col("original_price") - col("selling_price")) / 
+          col("original_price") * 100, 2)
+)
+
+agg_discount = df_discount.groupBy("url", "name") \
+    .agg(_sum("discount_percentage").alias("total_discount"))
+
+top5_discount = agg_discount.orderBy(
+    col("total_discount").desc()
+).limit(5)
+\end{lstlisting}
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=0.85\textwidth]{image.png}
+\caption{Results of the two analyses on Adidas products.}
+\label{fig:adidas_analysis}
+\end{figure}
+\newpage
+
+The top section shows products with the highest reviews and lowest prices. The bottom section shows products with the largest discounts. Many NULL entries originate from missing or malformed source values for \texttt{original\_price} (empty strings or values such as \texttt{\$25}), rather than from an absent discount column. In the preprocessing stage, \texttt{original\_price} was cleaned (symbols removed and cast to numeric), and rows without a valid value were excluded before computing the discount.
+ The discount calculation produced meaningful values.
+
+\bigskip
+
+\textbf{Important note:} during preprocessing we explicitly cleaned and validated the following columns to ensure reliable calculations:
+
+\begin{itemize}
+    \item \textbf{\texttt{original\_price}}: removal of symbols (\$, commas), conversion to numeric, exclusion of empty or invalid values before computing discount percentage;
+    \item \textbf{\texttt{selling\_price}}: verification and enforcement of numeric type to allow correct comparisons;
+    \item \textbf{\texttt{reviews\_count}}: treated as an integer and aggregated into \texttt{total\_reviews} for popularity ranking.
+\end{itemize}
+
+These cleaning steps ensure that the top-5 results consider only valid rows.
+
+\subsection{Impact of Processing Time}
+
+I tested different trigger intervals while monitoring the file stream. With a processing time of 1 second, each file is processed almost immediately after it appears. The stream is very reactive but can fall behind if processing takes too long. With 5 seconds, Spark groups files that arrive within that window and processes them together, reducing overhead but increasing latency slightly.
+
+With 10 and 30 second processing times, the behavior becomes more batch-like. Files accumulate before being processed together. This creates higher latency but is more efficient in terms of system resources. The key insight is that there is always a trade-off between response time and processing efficiency. Short processing times provide faster updates but can overwhelm the system, while longer processing times provide more efficient batch processing but increase result latency.
+
+\section{Conclusion}
+
+Through this lab, I gained practical experience with several important concepts in streaming data processing. First, I learned how Spark continuously monitors data sources and processes new data in micro-batches without requiring manual intervention. This is fundamental for building real-time applications.
+
+Second, I understood the importance of the trigger parameter in controlling the balance between response time and processing efficiency. Short trigger intervals provide faster updates but can cause the system to fall behind, while longer intervals are more efficient but increase latency.
+
+Third, the difference between append and complete output modes became clear. Append mode works well for simple queries without state, while complete mode is necessary for aggregations that require cumulative results.
+
+Finally, I performed real-time analytics on streaming data from both Kafka and file sources, including multi-dimensional aggregations and computed metrics. These skills are directly applicable to real-world scenarios in e-commerce, financial services, and other domains requiring real-time data processing.
+
+The complete source code for this lab is available in my GitHub repository at \url{https://github.com/oulrich-ops/kafka-confluence} in the lab4 directory.
+
+\end{document}
